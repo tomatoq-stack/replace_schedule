@@ -45,29 +45,34 @@ const html = fs.readFileSync(path.join(__dirname, '../index.html'));
     for(const code of ['MM048','MX122-2','UNRECOGNIZED']) await check(code+' remains unassigned with reason',async()=>{const r=await scenario({'9:00':appt(code)});assert.equal(r.assigned.length,0);assert.ok(r.unassigned[0].reason);});
     await check('MM-EZ773-MM blocks middle treatment',async()=>{const r=await scenario({'9:00':appt('MM105'),'9:30':appt('EZ773'),'10:00':appt('MM105')});assert.ok(r.unassigned.some(a=>a.slot==='9:30'&&a.reason.includes('MM-EZ773-MM')));});
     await check('consecutive MM105 same patient rejected',async()=>assert.equal((await scenario({'9:30':appt('MM105')},['신현주'],{schedules:{'신현주':{'9:00':appt('MM105')}}})).assigned.length,0));
-    await check('five consecutive slots allowed, sixth blocked',async()=>{
-      const five={'9:00':appt(),'9:30':appt(),'10:00':appt(),'10:30':appt()};
-      assert.equal((await scenario({'11:00':appt()},['신현주'],{schedules:{'신현주':five}})).assigned.length,1);
-      assert.equal((await scenario({'11:30':appt()},['신현주'],{schedules:{'신현주':{...five,'11:00':appt()}}})).assigned.length,0);
+    await check('four consecutive slots allowed, fifth blocked',async()=>{
+      const three={'9:00':appt(),'9:30':appt(),'10:00':appt()};
+      assert.equal((await scenario({'10:30':appt()},['신현주'],{schedules:{'신현주':three}})).assigned.length,1);
+      assert.equal((await scenario({'11:00':appt()},['신현주'],{schedules:{'신현주':{...three,'10:30':appt()}}})).assigned.length,0);
     });
+    for(const code of ['MM304,IN302-1','IN302-1,MM304']) await check(code+' ignores MM304 and converts to IN105',async()=>assert.equal((await scenario({'9:00':appt(code)})).assigned[0].code,'IN105'));
+    for(const code of ['MM304,MM302-1','MM302-1,MM304','MM302-1']) await check(code+' converts to one MM105 slot',async()=>{const r=await scenario({'9:00':appt(code)});assert.equal(r.assigned[0].code,'MM105');assert.equal(r.extra['신현주']['9:30'],undefined);});
+    await check('standalone MM304 is ignored rather than reported unassigned',async()=>{const r=await scenario({'9:00':appt('MM304')});assert.equal(r.assigned.length,0);assert.equal(r.unassigned.length,0);});
+    await check('newly assigned slots also count toward four consecutive limit',async()=>{const r=await scenario({'9:00':appt(),'9:30':appt(),'10:00':appt(),'10:30':appt(),'11:00':appt()});assert.equal(r.assigned.length,4);assert.equal(r.unassigned.length,1);});
+    await check('filling an internal gap cannot create five consecutive slots',async()=>{const r=await scenario({'10:00':appt()},['신현주'],{schedules:{'신현주':{'9:00':appt(),'9:30':appt(),'10:30':appt(),'11:00':appt()}}});assert.equal(r.assigned.length,0);});
     await check('maximum case count respected',async()=>{const result=await page.evaluate(()=>{MAX_CNT['신현주']=0;return true;});assert.ok(result);assert.equal((await scenario({'9:00':appt()})).assigned.length,0);await page.evaluate(()=>delete MAX_CNT['신현주']);});
-    await check('robot reserves both slots and counts as one case',async()=>{const r=await scenario({'9:00':appt('MM302-1')},['김수현']);assert.equal(r.assigned.length,1);assert.equal(r.extra['김수현']['9:30']._cont,true);assert.equal(await page.evaluate(r=>countSlots('김수현',r.extra['김수현']),r),1);});
-    for(const slot of ['11:30','17:30']) await check('robot cannot cross boundary '+slot,async()=>assert.equal((await scenario({[slot]:appt('MM302-1')},['김수현','곽나현'])).assigned.length,0));
-    await check('robot second slot cannot overwrite reservation',async()=>assert.equal((await scenario({'9:00':appt('MM302-1')},['김수현'],{schedules:{'김수현':{'9:30':appt()}}})).assigned.length,0));
+    await check('robot reserves both slots and counts as one case',async()=>{const r=await scenario({'9:00':appt('E7774(W)')},['김수현']);assert.equal(r.assigned.length,1);assert.equal(r.extra['김수현']['9:30']._cont,true);assert.equal(await page.evaluate(r=>countSlots('김수현',r.extra['김수현']),r),1);});
+    for(const slot of ['11:30','17:30']) await check('robot cannot cross boundary '+slot,async()=>assert.equal((await scenario({[slot]:appt('E7774(W)')},['김수현','곽나현'])).assigned.length,0));
+    await check('robot second slot cannot overwrite reservation',async()=>assert.equal((await scenario({'9:00':appt('E7774(W)')},['김수현'],{schedules:{'김수현':{'9:30':appt()}}})).assigned.length,0));
     await check('respiratory qualification applied',async()=>assert.equal((await scenario({'9:00':appt('MM440')},['신현주','장희진'])).assigned[0].therapist,'장희진'));
     await check('generic care blocked in specialist session',async()=>assert.equal((await scenario({'9:00':appt()},['김수현'])).assigned.length,0));
     await check('hydrotherapy adjacent slot blocked',async()=>assert.equal((await scenario({'9:30':appt()},['윤대환'])).assigned.length,0));
     await check('partial leave only reassigns affected appointments',async()=>{const r=await scenario({'9:00':appt(),'14:00':appt()},['신현주'],{leaves:{'정주은':{type:'partial',start:'9:00',dur:2}}});assert.deepEqual(r.assigned.map(a=>a.slot),['9:00']);assert.equal(await page.locator('#resultArea tr').first().locator('.sc-ng').count(),0);});
     await check('partial-leave recipient available outside leave',async()=>{const r=await scenario({'9:00':appt()},['신현주'],{leaves:{'신현주':{type:'partial',start:'13:00',dur:2}}});assert.equal(r.assigned[0].therapist,'신현주');});
     await check('partial-leave recipient blocked during leave',async()=>assert.equal((await scenario({'13:00':appt()},['신현주'],{leaves:{'신현주':{type:'partial',start:'13:00',dur:2}}})).assigned.length,0));
-    await check('robot overlapping only second half of leave is moved',async()=>assert.equal((await scenario({'9:00':appt('MM302-1')},['김수현'],{leaves:{'정주은':{type:'partial',start:'9:30',dur:2}}})).assigned.length,1));
+    await check('robot overlapping only second half of leave is moved',async()=>assert.equal((await scenario({'9:00':appt('E7774(W)')},['김수현'],{leaves:{'정주은':{type:'partial',start:'9:30',dur:2}}})).assigned.length,1));
     await check('lunch excluded from leave duration',async()=>{const r=await scenario({'11:30':appt(),'13:00':appt(),'14:00':appt(),'14:30':appt()},['신현주'],{leaves:{'정주은':{type:'partial',start:'11:30',dur:2}}});assert.deepEqual(r.assigned.map(a=>a.slot),['11:30','13:00','14:00']);});
-    await check('robot ending at lunch keeps table columns aligned',async()=>{await scenario({'11:00':appt('MM302-1')},['김수현']);const widths=await page.locator('#resultArea tr').evaluateAll(rows=>rows.map(r=>Array.from(r.children).reduce((n,c)=>n+c.colSpan,0)));assert.ok(widths.length>1);assert.ok(widths.every(w=>w===widths[0]),JSON.stringify(widths));});
+    await check('robot ending at lunch keeps table columns aligned',async()=>{await scenario({'11:00':appt('E7774(W)')},['김수현']);const widths=await page.locator('#resultArea tr').evaluateAll(rows=>rows.map(r=>Array.from(r.children).reduce((n,c)=>n+c.colSpan,0)));assert.ok(widths.length>1);assert.ok(widths.every(w=>w===widths[0]),JSON.stringify(widths));});
     await check('unassigned reason visible in page',async()=>{await scenario({'9:00':appt('MM048')});assert.match(await page.locator('#msgArea').innerText(),/MM048.*대체 불가/);});
     await check('changing leave invalidates export and results',async()=>{await scenario({'9:00':appt()});await page.locator('[id="type-정주은"]').selectOption('partial');assert.equal(await page.evaluate(()=>globalResultData),null);assert.equal(await page.locator('#expBtn').isDisabled(),true);});
     // Actual XLSX bytes -> file input -> parse -> controls -> assignment -> download -> read back.
     await check('real XLSX upload accepts unknown PT and marks robot continuation',async()=>{
-      const bytes=await page.evaluate(()=>{const ws={};const put=(addr,v)=>ws[addr]={t:typeof v==='number'?'n':'s',v};put('F3','정주은');put('G3',1);put('N3','가상환자\nIN105');put('F4','신규치료사');put('G4',0);put('F5','김수현');put('G5',1);put('H5','로봇환자\nMM302-1');put('F6','김민수');put('G6',0);ws['!ref']='A1:BM6';const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'일정');return Array.from(new Uint8Array(XLSX.write(wb,{type:'array',bookType:'xlsx'})));});
+      const bytes=await page.evaluate(()=>{const ws={};const put=(addr,v)=>ws[addr]={t:typeof v==='number'?'n':'s',v};put('F3','정주은');put('G3',1);put('N3','가상환자\nIN105');put('F4','신규치료사');put('G4',0);put('F5','김수현');put('G5',1);put('H5','로봇환자\nE7774(W)');put('F6','김민수');put('G6',0);ws['!ref']='A1:BM6';const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'일정');return Array.from(new Uint8Array(XLSX.write(wb,{type:'array',bookType:'xlsx'})));});
       await page.locator('#fileInput').setInputFiles({name:'가상_스케줄.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:Buffer.from(bytes)});
       await page.waitForFunction(()=>document.getElementById('fileStatus').textContent.includes('로드 완료'));
       assert.deepEqual(await page.evaluate(()=>PT_NAMES),['김수현','신규치료사','정주은']);
@@ -89,6 +94,14 @@ const html = fs.readFileSync(path.join(__dirname, '../index.html'));
       await page.evaluate(()=>{populateControls();});
       assert.equal(await page.locator('#absList b').count(),0);
       assert.ok((await page.locator('#absList').innerText()).includes('<b>신규</b>'));
+    });
+    await check('worksheet parsing retains 302-1 regardless of MM304 order and ignores MM304-only slot',async()=>{
+      const result=await page.evaluate(()=>{
+        const ws=XLSX.utils.aoa_to_sheet([[],[],['','','','','','신규치료사',3,'환자A\nMM304,IN302-1','','','환자B\nMM302-1,MM304','','','','','','환자C\nMM304']]);
+        parseSchedule(ws);
+        return {first:SCHED['신규치료사']['8:00'].c,second:SCHED['신규치료사']['8:30'].c,ignored:SCHED['신규치료사']['9:30']===undefined};
+      });
+      assert.deepEqual(result,{first:'IN302-1',second:'MM302-1',ignored:true});
     });
     assert.deepEqual(errors,[]);console.log(`${passed} checks passed; no uncaught browser errors.`);
   } finally { if(browser) await browser.close(); await new Promise(r=>server.close(r)); }
